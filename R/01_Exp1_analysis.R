@@ -17,7 +17,14 @@ library(gtools)
 library(lme4)
 library(glmmTMB)
 #devtools::install_github("onofriAndreaPG/drcSeedGerm")
+#devtools::install_github("DoseResponse/drcData")
+library(drcData)
 library(drcSeedGerm)
+library(drc)
+library(magic)
+library(car)
+library(metafor)
+library(multcomp)
 
 # Load cleaned (non-cumulative) germination data ----
 phau.exp1 <- read.csv("./data/exp1_PHAU_noncum.csv", as.is=T)
@@ -55,35 +62,60 @@ all.spp[,6:27] <- abs(all.spp[,6:27])
 # Remove trt.id column
 all.spp <- all.spp[,1:27]
 
-# Time to event germination curve ----
-## Flip dataframe ----
-n.vec <- as.vector(rep(all.spp$N, each=23))
-TTE.all.spp <- makeDrm(all.spp[,6:27], all.spp[,1:3], n.vec, 1:22)
+# Add replicate column that include all treatment factors
+all.spp1 <- all.spp
+all.spp1[["Rep"]] <- with(all.spp1, interaction(temp, species, MPA, rep))
 
-plot(propCum ~ timeAf, data = TTE.all.spp, subset=c(is.finite(TTE.all.spp)==T), pch = 20,
-     xlab= "Time (days)", ylab = "Proportion of germinated seeds", xlim=c(0,25),
-     ylim = c(0, 1))
-for(i in 2:15){
-  polygon(c(TTE.all.spp$timeBef[i], TTE.all.spp$timeAf[i], TTE.all.spp$timeAf[i], TTE.all.spp$timeBef[i]), 
-          c(TTE.all.spp$propCum[i-1], TTE.all.spp$propCum[i-1], TTE.all.spp$propCum[i], TTE.all.spp$propCum[i] ),
-          density=100, col="grey", border=NA)
-}
-polygon(c(15, 17, 17, 15), 
-        c(0.86, 0.86, 1, 1 ),
-        density=100, col="grey")
-lines(c(propCum, 0.86) ~ c(timeAf, 17), type="s", data = TTE.all.spp,
-      col="blue", subset=is.finite(timeAf)==T)
-lines(c(propCum, 1) ~ c(timeBef, 17), type="s", data = TTE.all.spp,
-      col="red")
+# Flip data set
+spp.long <- pivot_longer(all.spp1, cols="0":"30", names_to = "Day", values_to = "Germ")
+
+# Add time interval
+spp.long$Start <- spp.long$Day
+spp.long$End <- NA
+
+for (i in 1:nrow(spp.long)){
+  if(spp.long$Day[i]=="30"){
+    spp.long$End[i] <- "Inf"
+  }else{
+    spp.long$End[i] <- spp.long$Day[i+1]
+  }#ifelse
+}#for
+
+# Calculate cumulative germination
+spp.long$CumGerm <- NA
+for (i in 1:nrow(spp.long)){
+  if(spp.long$Day[i]=="0"){
+    spp.long$CumGerm[i] <- spp.long$Germ[i]
+  }else{
+    spp.long$CumGerm[i] <- spp.long$Germ[i] + spp.long$CumGerm[i-1]
+  }#ifelse
+}#for
+
+# Calculate cumulative germination proportion
+spp.long$CumGRP <- spp.long$CumGerm / spp.long$N
+
+# Plot germination curves - clean this up!
+ggplot(spp.long, aes(x = Day, y = CumGerm, color=rep, shape=MPA)) + 
+  geom_point(size=2.5) + ylim(0,100) +
+  geom_line() + facet_wrap(~species*temp) + labs(x ="Days", y = "Total Germination (%)") +
+  scale_colour_grey(start = 0, end = .6) + scale_shape_manual(values = c(0, 16, 4, 6, 15))
+
+# Model germination curves
+phau.long <- filter(spp.long, species == "PHAU")
+test <- drm(Germ ~ temp * MPA, data=phau.long, fct=LL.2())
+
+ggplot(phau.long, aes(x = Day, y = CumGerm, color=rep, shape=MPA)) + 
+  geom_point() + geom_line() + facet_wrap(~temp)
 
 
 # https://www.statforbiology.com/seedgermination/censoring
 
+# https://stackoverflow.com/questions/14777393/modelling-data-with-a-weibull-link-function-in-r
+
+# file:///C:/Users/egtar/Downloads/two-step5.pdf
 
 
-
-
-
+plot(CumGRP ~ Day, phau.long)
 
 
 # Calculate germination indices for response variables ----
@@ -181,4 +213,3 @@ fitgrp.beta <- fitdistrplus::fitdist(all.spp$germprop, "beta")
 fitgrp.beta <- fitdistrplus::fitdist(all.spp$germprop, "beta")
 plot(fitgrp)
 
-grp.mod <- glmmTMB()
