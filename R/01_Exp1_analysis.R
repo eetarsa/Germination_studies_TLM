@@ -116,8 +116,30 @@ for (i in 1:nrow(spp.long)){
 # Plot germination curves - clean this up! ----
 ggplot(spp.long, aes(x = Day, y = CumGRP, color=rep, shape=MPA)) + 
   geom_point(size=2.5) + ylim(0,1) +
-  geom_line() + facet_wrap(~species*temp) + labs(x ="Days", y = "Total Germination (%)") +
+  geom_line() + facet_wrap(~species*temp) + labs(x ="Days", y = "Germination proportion") +
   scale_colour_grey(start = 0, end = .6) + scale_shape_manual(values = c(0, 16, 4, 6, 15)) +
+  theme_bw()
+
+germ.stats <- spp.long %>%
+  group_by(temp, species, MPA, Day) %>% 
+  dplyr::summarize(Mean  = mean(CumGRP, na.rm = TRUE),
+                   SD    = sd(CumGRP, na.rm = TRUE),
+                   nsize = sum(!is.na(CumGRP)),
+                   SE    = SD/sqrt(nsize))
+
+ggplot(germ.stats, aes(x = Day, y = Mean, group=MPA, color=MPA, shape=MPA)) + 
+  geom_line(aes(group=MPA, color=MPA)) + 
+  geom_point(size=2.5) + ylim(0,1) +
+  facet_wrap(~species*temp) + labs(x ="Days", y = "Germination proportion") +
+  scale_colour_grey(start = 0, end = 0.5) + scale_shape_manual(values = c(0, 16, 4, 6, 15)) +
+  theme_bw()
+
+ggplot(germ.stats, aes(x = Day, y = Mean, group=MPA, color=MPA, shape=MPA)) + 
+  geom_errorbar(aes(ymin=Mean-SE, ymax=Mean+SE), width = 0.2) +
+  geom_line(aes(group=MPA, color=MPA)) + 
+  geom_point(size=2.5) + ylim(0,1) +
+  facet_wrap(~species*temp) + labs(x ="Days", y = "Germination proportion") +
+  scale_colour_grey(start = 0, end = 0.5) + scale_shape_manual(values = c(0, 16, 4, 6, 15)) +
   theme_bw()
 
 # Model germination curves ----
@@ -129,9 +151,9 @@ scam.long <- filter(spp.long, species == "SCAM")
 ## PHAU models ----
 ### Temp 23 ----
 phau.23 <- filter(phau.long, temp == "23")
-phau23.mod.mpa0 <- drm(Germ ~ Start + End, fct = LL.3(),
-                data = phau.23, type = "event", 
-                curveid = rep, subset = c(MPA == "0"))
+phau23.mod.mpa0 <- drm(Germ ~ Start + End, fct=LL.4(fixed=c(NA, 0, 1, NA)), # fixes upper limit at 100 - NOT SURE IF THIS IS RIGHT THOUGH; SHOULD IT BE FIXED TO N (WHICH CHANGES)
+                       data = phau.23, type = "event", 
+                       curveid = rep, subset = c(MPA == "0"))
 plot(phau23.mod.mpa0, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 23 @ 0 MPA")
@@ -142,8 +164,8 @@ ph23.mpa0$temp <- "23"
 ph23.mpa0$MPA <- "0"
 
 phau23.mod.mpa15 <- drm(Germ ~ Start + End, fct = LL.3(),
-                data = phau.23, type = "event", 
-                curveid = rep, subset = c(MPA == "-0.15"))
+                        data = phau.23, type = "event", 
+                        curveid = rep, subset = c(MPA == "-0.15"))
 plot(phau23.mod.mpa15, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 23 @ -0.15 MPA")
@@ -154,8 +176,8 @@ ph23.mpa15$temp <- "23"
 ph23.mpa15$MPA <- "-0.15"
 
 phau23.mod.mpa3 <- drm(Germ ~ Start + End, fct = LL.3(),
-                data = phau.23, type = "event", 
-                curveid = rep, subset = c(MPA == "-0.3"))
+                       data = phau.23, type = "event", 
+                       curveid = rep, subset = c(MPA == "-0.3"))
 plot(phau23.mod.mpa3, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 23 @ -0.3 MPA")
@@ -164,10 +186,13 @@ ph23.mpa3 <- as.data.frame(tidy(phau23.mod.mpa3))
 ph23.mpa3$species <- "PHAU"
 ph23.mpa3$temp <- "23"
 ph23.mpa3$MPA <- "-0.3"
+mselect(phau23.mod.mpa3, # unsure of why this doesn't work - need to figure out some model selection
+        fctList = list(W1.3(),W1.4(), W2.3(), W2.4(),  LL.4()), linreg=TRUE) 
+
 
 phau23.mod.mpa6 <- drm(Germ ~ Start + End, fct = LL.3(),
-                data = phau.23, type = "event", 
-                curveid = rep, subset = c(MPA == "-0.6"))
+                       data = phau.23, type = "event", 
+                       curveid = rep, subset = c(MPA == "-0.6"))
 plot(phau23.mod.mpa6, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 23 @ -0.6 MPA")
@@ -178,8 +203,8 @@ ph23.mpa6$temp <- "23"
 ph23.mpa6$MPA <- "-0.6"
 
 phau23.mod.mpa12 <- drm(Germ ~ Start + End, fct = LL.3(),
-                data = phau.23, type = "event", 
-                curveid = rep, subset = c(MPA == "-1.2"))
+                        data = phau.23, type = "event", 
+                        curveid = rep, subset = c(MPA == "-1.2"))
 plot(phau23.mod.mpa12, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 23 @ -1.2 MPA")
@@ -192,8 +217,8 @@ ph23.mpa12$MPA <- "-1.2"
 ### Temp 28 ----
 phau.28 <- filter(phau.long, temp == "28")
 phau28.mod.mpa0 <- drm(Germ ~ Start + End, fct = LL.3(),
-                     data = phau.28, type = "event", 
-                     curveid = rep, subset = c(MPA == "0"))
+                       data = phau.28, type = "event", 
+                       curveid = rep, subset = c(MPA == "0"))
 plot(phau28.mod.mpa0, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 28 @ 0 MPA")
@@ -204,8 +229,8 @@ ph28.mpa0$temp <- "28"
 ph28.mpa0$MPA <- "0"
 
 phau28.mod.mpa15 <- drm(Germ ~ Start + End, fct = LL.3(),
-                      data = phau.28, type = "event", 
-                      curveid = rep, subset = c(MPA == "-0.15"))
+                        data = phau.28, type = "event", 
+                        curveid = rep, subset = c(MPA == "-0.15"))
 plot(phau28.mod.mpa15, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 28 @ -0.15 MPA")
@@ -216,8 +241,8 @@ ph28.mpa15$temp <- "28"
 ph28.mpa15$MPA <- "-0.15"
 
 phau28.mod.mpa3 <- drm(Germ ~ Start + End, fct = LL.3(),
-                     data = phau.28, type = "event", 
-                     curveid = rep, subset = c(MPA == "-0.3"))
+                       data = phau.28, type = "event", 
+                       curveid = rep, subset = c(MPA == "-0.3"))
 plot(phau28.mod.mpa3, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 28 @ -0.3 MPA")
@@ -228,8 +253,8 @@ ph28.mpa3$temp <- "28"
 ph28.mpa3$MPA <- "-0.3"
 
 phau28.mod.mpa6 <- drm(Germ ~ Start + End, fct = LL.3(),
-                     data = phau.28, type = "event", 
-                     curveid = rep, subset = c(MPA == "-0.6"))
+                       data = phau.28, type = "event", 
+                       curveid = rep, subset = c(MPA == "-0.6"))
 plot(phau28.mod.mpa6, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 28 @ -0.6 MPA")
@@ -240,8 +265,8 @@ ph28.mpa6$temp <- "28"
 ph28.mpa6$MPA <- "-0.6"
 
 phau28.mod.mpa12 <- drm(Germ ~ Start + End, fct = LL.3(),
-                      data = phau.28, type = "event", 
-                      curveid = rep, subset = c(MPA == "-1.2"))
+                        data = phau.28, type = "event", 
+                        curveid = rep, subset = c(MPA == "-1.2"))
 plot(phau28.mod.mpa12, log = "", xlab = "Time", 
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="PHAU 28 @ -1.2 MPA")
@@ -883,19 +908,19 @@ sm36.mpa12$MPA <- "-1.2"
 
 # Combine all data sets ----
 germ.met.all <- rbind(ph23.mpa0, ph23.mpa15, ph23.mpa3, ph23.mpa6, ph23.mpa12,
-                ph28.mpa0, ph28.mpa15, ph28.mpa3, ph28.mpa6, ph28.mpa12,
-                ph33.mpa0, ph33.mpa15, ph33.mpa3, ph33.mpa6, ph33.mpa12,
-                ph36.mpa0, ph36.mpa15, ph36.mpa3, ph36.mpa6, ph36.mpa12,
-                s23.mpa0, s23.mpa15, s23.mpa3, s23.mpa6, s23.mpa12,
-                s28.mpa0, s28.mpa15, s28.mpa3, s28.mpa6, s28.mpa12,
-                s33.mpa0, s33.mpa15, s33.mpa3, s33.mpa6, s33.mpa12,
-                s36.mpa0, s36.mpa15, s36.mpa3, s36.mpa6, s36.mpa12,
-                sm23.mpa0, sm23.mpa15, sm23.mpa3, sm23.mpa6, sm23.mpa12,
-                sm28.mpa0, sm28.mpa15, sm28.mpa3, sm28.mpa6, sm28.mpa12,
-                sm33.mpa0, sm33.mpa15, sm33.mpa3, sm33.mpa6, sm33.mpa12,
-                sm36.mpa0, sm36.mpa15, sm36.mpa3, sm36.mpa6, sm36.mpa12)
+                      ph28.mpa0, ph28.mpa15, ph28.mpa3, ph28.mpa6, ph28.mpa12,
+                      ph33.mpa0, ph33.mpa15, ph33.mpa3, ph33.mpa6, ph33.mpa12,
+                      ph36.mpa0, ph36.mpa15, ph36.mpa3, ph36.mpa6, ph36.mpa12,
+                      s23.mpa0, s23.mpa15, s23.mpa3, s23.mpa6, s23.mpa12,
+                      s28.mpa0, s28.mpa15, s28.mpa3, s28.mpa6, s28.mpa12,
+                      s33.mpa0, s33.mpa15, s33.mpa3, s33.mpa6, s33.mpa12,
+                      s36.mpa0, s36.mpa15, s36.mpa3, s36.mpa6, s36.mpa12,
+                      sm23.mpa0, sm23.mpa15, sm23.mpa3, sm23.mpa6, sm23.mpa12,
+                      sm28.mpa0, sm28.mpa15, sm28.mpa3, sm28.mpa6, sm28.mpa12,
+                      sm33.mpa0, sm33.mpa15, sm33.mpa3, sm33.mpa6, sm33.mpa12,
+                      sm36.mpa0, sm36.mpa15, sm36.mpa3, sm36.mpa6, sm36.mpa12)
 
-# Remove negative for 'b' term (see reference below): disregard negative, come from the drc package being rooted in bioassays
+# Remove negative for 'b' term (see reference below): disregard negative, comes from the drc package being rooted in bioassays
 # https://www.statforbiology.com/2021/stat_drcte_2-methods/
 for (i in 1:nrow(germ.met.all)){
   if (germ.met.all$term[i] == "b") (germ.met.all$estimate[i] <- abs(germ.met.all$estimate[i]))
@@ -924,7 +949,9 @@ gmet.stats$SE <- gmet.stats$sd/sqrt(gmet.stats$size)
 # e: time to 50% germination (time to 50% of max germination)
 ## b plots; slope ----
 b.g1 <- ggplot(filter(germ.met.all, term == "b"), aes(x=MPA, y=estimate)) +
-        geom_boxplot() + geom_jitter(alpha=0.2) + facet_wrap(~species); b.g1
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(alpha=0.2, position = position_jitter(width = 0.2, height = 0.1)) +
+  facet_wrap(~species); b.g1
 
 # color pallete: ("cadetblue3", "goldenrod", "seagreen4", "orangered3")
 b.g2 <- ggplot(filter(gmet.stats, term == "b"), aes(x=MPA, y=mean, fill = temp)) +
@@ -935,8 +962,9 @@ b.g2 <- ggplot(filter(gmet.stats, term == "b"), aes(x=MPA, y=mean, fill = temp))
 
 ## d plots; slope ----
 d.g1 <- ggplot(filter(germ.met.all, term == "d"), aes(x=MPA, y=estimate)) +
-  geom_boxplot() + geom_jitter(alpha=0.2) + 
-  ylim(0,1) + facet_wrap(~species); d.g1
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(alpha=0.2, position = position_jitter(width = 0.2, height = 0.1)) +
+  facet_wrap(~species) + ylim(0,1); d.g1
 
 # color pallete: ("cadetblue3", "goldenrod", "seagreen4", "orangered3")
 d.g2 <- ggplot(filter(gmet.stats, term == "d"), aes(x=MPA, y=mean, fill = temp)) +
@@ -947,7 +975,8 @@ d.g2 <- ggplot(filter(gmet.stats, term == "d"), aes(x=MPA, y=mean, fill = temp))
 
 ## e plots; slope ----
 e.g1 <- ggplot(filter(germ.met.all, term == "e"), aes(x=MPA, y=estimate)) +
-  geom_boxplot() + geom_jitter(alpha=0.2) + 
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(alpha=0.2, position = position_jitter(width = 0.2, height = 0.1)) +
   facet_wrap(~species); e.g1
 
 # color pallete: ("cadetblue3", "goldenrod", "seagreen4", "orangered3")
@@ -956,7 +985,31 @@ e.g2 <- ggplot(filter(gmet.stats, term == "e"), aes(x=MPA, y=mean, fill = temp))
   geom_point(aes(fill=temp), color="black", pch=21, size=3.5, position=position_dodge(width=0.8)) +
   scale_fill_grey(start=1, end=0) +
   facet_wrap(~species, ncol=1); e.g2
-  
+
+# Statistical models ----
+## d; max germ ----
+d.estimate <- filter(germ.met.all, term == "d")
+d.mod1 <- glmer(estimate ~ (temp * MPA) + species +
+                  (1|curve), data=d.estimate)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Try prediction plots with CI ----
 newdata <- expand.grid(conc=exp(seq(log(0.5), log(100), length=100)))
