@@ -721,10 +721,10 @@ plot(scam23.mod.mpa12, log = "", xlab = "Time",
      ylab = "Proportion of germinated seeds",
      xlim = c(0, 30), ylim = c(0,1), main="SCAM 23 @ -1.2 MPA")
 summary(scam23.mod.mpa12) # NOTHING GERMINATED HERE! 
-# Create data frame with 0 values
+# Create data frame with 0 for max germination and slope, set t50 (e) = max data collection interval (30 days)
 term <- c("b", "b", "b", "d", "d", "d", "e", "e", "e")
 curve <- c("1", "2", "3", "1", "2", "3", "1", "2", "3")
-estimate <- rep(0, 9)
+estimate <- c(0,0,0,0,0,0,30,30,30)
 std.error <- rep(0, 9)
 statistic <- rep(0, 9)
 p.value <- rep(NA, 9)
@@ -1160,6 +1160,100 @@ g <- gtable_add_grob(g, yaxis, max(pp$t), max(pp$r) + 1, max(pp$b), max(pp$r) + 
                      clip = "off", name = "axis-r")
 
 grid.draw(g)
-ggsave("C:/Users/egtar/Desktop/wat-pt2.png", g, width=5, height=3.5, unit="in", dpi=800)
+#ggsave("C:/Users/egtar/Desktop/wat-pt2.png", g, width=5, height=3.5, unit="in", dpi=800)
 
+## e; t50 ----
+e.estimate <- filter(germ.met.all, term == "e")
+hist(log(e.estimate$estimate))
 
+ggplot(e.estimate, aes(x=species, y=estimate)) +
+  geom_boxplot(outlier.shape = NA) + geom_jitter() +
+  facet_wrap (~temp*MPA)
+
+for (i in 1:nrow(e.estimate)){
+  if (e.estimate$estimate[i] == 0.00000000) e.estimate$estimate[i] <-  0.0005
+}
+
+# Look at paired t-test between 0 MPA at time 1 & 2; if not different, drop reps 4-6 of 0 MPA for models
+# calculate t-test for MPA0 across data collection periods
+time1 <- filter(e.estimate, MPA == 0 & curve != 4 & curve != 5 & curve != 6)
+time2 <- filter(e.estimate, MPA == 0 & curve != 1 & curve != 2 & curve != 3)
+all.time <- rbind(time1,time2)
+ggplot(all.time, aes(x=curve, y=estimate, color=species)) +
+  geom_point()
+
+phau.time1 <- filter(time1, species == "PHAU")
+phau.time2 <- filter(time2, species == "PHAU")
+phau.t <- t.test(phau.time1$estimate, phau.time2$estimate, paired = TRUE); phau.t # accept null: no difference between time periods for PHAU
+
+scac.time1 <- filter(time1, species == "SCAC")
+scac.time2 <- filter(time2, species == "SCAC")
+scac.t <- t.test(scac.time1$estimate, scac.time2$estimate, paired = TRUE); scac.t # reject null: there is a difference between time periods for SCAM
+
+scam.time1 <- filter(time1, species == "SCAM")
+scam.time2 <- filter(time2, species == "SCAM")
+scam.t <- t.test(scam.time1$estimate, scam.time2$estimate, paired = TRUE); scam.t # reject null: there is a difference between time periods for SCAM
+
+# Add time component to dataset to incorporate time differences in model
+e.estimate$time <- NA
+for (i in 1:nrow(e.estimate)){
+  if (e.estimate$MPA[i] == -1.2 | e.estimate$MPA[i] == -0.6){
+    e.estimate$time[i] <-  2
+  }else{
+    e.estimate$time[i] <-  1
+  }
+}
+e.estimate$time <- as.factor(e.estimate$time)
+
+# drop reps 4-6 (will account for time as a random effect)
+e.estimate2 <- filter(e.estimate, curve != 4 & curve != 5 & curve != 6)
+
+# Run model!
+e.mod1 <- lmer(log(estimate) ~ temp * MPA * species +
+                 (1|temp) + (1|temp:MPA) + (1|temp:MPA:species) + (1|time), data=e.estimate2,
+               control=lmerControl(optimizer="Nelder_Mead")) 
+# (1|temp) = chamber level variation; (1|temp:MPA) = variation among sets of cups across chambers; 
+# (1|temp:MPA:species) = variation among sets of cups within chambers; 
+# (1|time) accounts for potential differences across the two time collections; 
+# residual = variation in germination within cup (our response!)
+summary(e.mod1) # Check with Susan - the repetition in random effect estimates looks fishy..
+Anova(e.mod1)
+plot(e.mod1)
+simulationOutput.e.mod1 <- DHARMa::simulateResiduals(e.mod1, plot=T) # ehh, not great; better than sqrt
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$species) 
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$MPA)
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$Temp)
+
+# compare model with and without time
+e.mod2 <- lmer(log(estimate) ~ temp * MPA * species +
+                 (1|temp) + (1|temp:MPA) + (1|temp:MPA:species), data=e.estimate2,
+               control=lmerControl(optimizer="Nelder_Mead")) 
+
+lmtest::lrtest(e.mod1,e.mod2) # time is not siginficant
+
+##Pairwise comparisons for significant interactions (temp*MPA*species)
+emmip(e.mod1, species ~ MPA|temp) 
+emmip(e.mod1, species ~ temp|MPA) 
+# https://stackoverflow.com/questions/67338560/zeroinfl-model-warning-message-in-sqrtdiagobjectvcov-nans-produced
+
+emmeans(e.mod1, pairwise ~ MPA|temp|species, adjust='tukey') 
+
+e.mod1.rg <- update(ref_grid(e.mod1), tran = "log") # back-transform from log scale
+emmeans(e.mod1.rg, ~ MPA + temp + species, type="response") # By default, 95% CIs
+emm.e.mod1.rg <- confint(emmeans(e.mod1.rg, ~ MPA + temp + species, type="response"), adjust = "none", level = 0.68) # specify 68% CIs (roughly equivalent to +/- 1 SE)
+
+# something is not working here - I think the model optimizer is preventing estimate of SE
+
+col.pal <- c("tomato3", "cadetblue", "goldenrod")
+bw.pal <- c("gray80", "gray10", "gray40")
+t50.plot <- ggplot(data=emm.e.mod1.rg, aes(x = MPA, y = adj, shape = species, fill = species)) + 
+  geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5), alpha=0.3) +
+  geom_line(aes(group = species, color = species, alpha=0.05), size = 1, position=position_dodge(width = 0.5)) +
+  geom_point(aes(fill=species, shape=species), color="black", size=3.5, position=position_dodge(width=0.5)) +
+  ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
+  xlab("Water potential") + facet_wrap(~temp) + scale_shape_manual(values=c(21, 23, 24)) +
+  scale_fill_manual(values=col.pal, name="fill") +
+  scale_color_manual(values=col.pal) + 
+  theme_bw()
+t50.plot <- t50.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
+t50.plot
