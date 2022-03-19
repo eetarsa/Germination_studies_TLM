@@ -950,7 +950,7 @@ germ.met.all$MPA <- as.factor(germ.met.all$MPA)
 germ.met.all$MPA <- factor(germ.met.all$MPA, levels = c("0", "-0.15", "-0.3", "-0.6", "-1.2"))
 
 ggplot(filter(germ.met.all, term == "d"), aes(x=estimate, y=species)) +
-  geom_point() + xlim(0,1)
+  geom_point() + xlim(0,1) # make sure all d fit between 0 & 1
 
 # Calculate average values
 size <- function(X) sum(!is.na(X))
@@ -1012,26 +1012,6 @@ for (i in 1:nrow(d.estimate)){
   if (d.estimate$estimate[i] == 0.00000000) d.estimate$estimate[i] <-  0.0005
 }
 
-# Look at paired t-test between 0 MPA at time 1 & 2; if not different, drop reps 4-6 of 0 MPA for models
-# calculate t-test for MPA0 across data collection periods
-time1 <- filter(d.estimate, MPA == 0 & curve != 4 & curve != 5 & curve != 6)
-time2 <- filter(d.estimate, MPA == 0 & curve != 1 & curve != 2 & curve != 3)
-all.time <- rbind(time1,time2)
-ggplot(all.time, aes(x=curve, y=estimate, color=species)) +
-  geom_point()
-
-phau.time1 <- filter(time1, species == "PHAU")
-phau.time2 <- filter(time2, species == "PHAU")
-phau.t <- t.test(phau.time1$estimate, phau.time2$estimate, paired = TRUE); phau.t # accept null: no difference between time periods for PHAU
-
-scac.time1 <- filter(time1, species == "SCAC")
-scac.time2 <- filter(time2, species == "SCAC")
-scac.t <- t.test(scac.time1$estimate, scac.time2$estimate, paired = TRUE); scac.t # accept null: no difference between time periods for SCAC
-
-scam.time1 <- filter(time1, species == "SCAM")
-scam.time2 <- filter(time2, species == "SCAM")
-scam.t <- t.test(scam.time1$estimate, scam.time2$estimate, paired = TRUE); scam.t # reject null: there is a difference between time periods for SCAM
-
 # Add time component to dataset to incorporate time differences in model
 d.estimate$time <- NA
 for (i in 1:nrow(d.estimate)){
@@ -1043,25 +1023,40 @@ for (i in 1:nrow(d.estimate)){
 }
 d.estimate$time <- as.factor(d.estimate$time)
 
-# drop reps 4-6 (will account for time as a random effect)
+# drop reps 4-6 (will account for time as a random effect) - can't compare MPA with 6 reps (0MPA) to all others that have 3 reps
 d.estimate2 <- filter(d.estimate, curve != 4 & curve != 5 & curve != 6)
 
 # Run model!
 d.mod1 <- lmer(qlogis(estimate) ~ temp * MPA * species +
-               (1|temp) + (1|temp:MPA) + (1|temp:MPA:species) + (1|time), data=d.estimate2,
-               control=lmerControl(optimizer="Nelder_Mead")) 
-# (1|temp) = chamber level variation; (1|temp:MPA) = variation among sets of cups across chambers; 
-# (1|temp:MPA:species) = variation among sets of cups within chambers; 
-# (1|time) accounts for potential differences across the two time collections; 
-# residual = variation in germination within cup (our response!)
+               (1|time) + (1|time:temp) + (1|time:temp:MPA), 
+               data=d.estimate2, control=lmerControl(optimizer="Nelder_Mead")) 
+# (1|time) = variation 2 data collection time periods; 
+# (1|temp:time) = chamber level variation within each time period;
+# (1|time:temp:MPA) = variation among sets of boxes within chambers and time periods; 
+# I don't think I need anything like this in here (1|time:temp:MPA:species)
+    # WP and species are both at the box level (time:temp:MPA); within box level is residual (response)
+# residual = variation in germination within box (our response!)
+
 summary(d.mod1) # Check with Susan - the repetition in random effect estimates looks fishy..
+#  the number of observations looks correct (1 replicate was dropped, 180-1=179), do I need (1|time:temp:MPA:species) - no that would be 180 (my residual)
 Anova(d.mod1)
-plot(d.mod1) # outlier..
-simulationOutput.d.mod1 <- DHARMa::simulateResiduals(d.mod1, plot=T) # ehh, not great; better than sqrt
+plot(d.mod1) # outlier.. 
+# Try to find outlier
+ggplot(d.estimate, aes(x=scale(as.numeric(MPA)), y=scale(qlogis(estimate)), color=species)) +
+  geom_point() + facet_wrap(~as.numeric(temp)) # outlier - SCAM temp 23 where no germination occured - don't want to drop this outlier bcs it is an important data point
+
+simulationOutput.d.mod1 <- DHARMa::simulateResiduals(d.mod1, plot=T) # ehh, not great; better than sqrt trans
 DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate2$species) 
 DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate2$MPA)
 DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate2$Temp) 
-# there's quite a bit of underdispersion; overparameterizing model?
+# there's quite a bit of underdispersion; am I overparameterizing model?
+
+# compare model with and without time
+d.mod2 <- lmer(log(estimate) ~ temp * MPA * species +
+                 (1|temp) + (1|temp:MPA) + (1|temp:MPA:species), data=e.estimate2,
+               control=lmerControl(optimizer="Nelder_Mead")) 
+
+lmtest::lrtest(d.mod1,d.mod2) # time is significant - how should I proceed here?
 
 ##Pairwise comparisons for significant interactions (temp*MPA*species)
 emmip(d.mod1, species ~ MPA|temp) 
@@ -1082,11 +1077,11 @@ bw.pal <- c("gray80", "gray10", "gray40")
 max.germ.plot <- ggplot(data=emm.d.mod1.rg, aes(x = MPA, y = adj, shape = species, fill = species)) + 
   geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5), alpha=0.3) +
   geom_line(aes(group = species, color = species, alpha=0.05), size = 1, position=position_dodge(width = 0.5)) +
-  geom_point(aes(fill=species, shape=species), color="black", size=3.5, position=position_dodge(width=0.5)) +
+  geom_point(aes(fill=species, shape=species), color="black", size=2.5, position=position_dodge(width=0.5)) +
   ylab("Maximum germination (%)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
   xlab("Water potential") + facet_wrap(~temp) + scale_shape_manual(values=c(21, 23, 24)) +
-  scale_fill_manual(values=bw.pal, name="fill") +
-  scale_color_manual(values=bw.pal) + 
+  scale_fill_manual(values=col.pal, name="fill") +
+  scale_color_manual(values=col.pal) + 
   theme_bw()
 max.germ.plot <- max.germ.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
 max.germ.plot
@@ -1174,26 +1169,6 @@ for (i in 1:nrow(e.estimate)){
   if (e.estimate$estimate[i] == 0.00000000) e.estimate$estimate[i] <-  0.0005
 }
 
-# Look at paired t-test between 0 MPA at time 1 & 2; if not different, drop reps 4-6 of 0 MPA for models
-# calculate t-test for MPA0 across data collection periods
-time1 <- filter(e.estimate, MPA == 0 & curve != 4 & curve != 5 & curve != 6)
-time2 <- filter(e.estimate, MPA == 0 & curve != 1 & curve != 2 & curve != 3)
-all.time <- rbind(time1,time2)
-ggplot(all.time, aes(x=curve, y=estimate, color=species)) +
-  geom_point()
-
-phau.time1 <- filter(time1, species == "PHAU")
-phau.time2 <- filter(time2, species == "PHAU")
-phau.t <- t.test(phau.time1$estimate, phau.time2$estimate, paired = TRUE); phau.t # accept null: no difference between time periods for PHAU
-
-scac.time1 <- filter(time1, species == "SCAC")
-scac.time2 <- filter(time2, species == "SCAC")
-scac.t <- t.test(scac.time1$estimate, scac.time2$estimate, paired = TRUE); scac.t # reject null: there is a difference between time periods for SCAM
-
-scam.time1 <- filter(time1, species == "SCAM")
-scam.time2 <- filter(time2, species == "SCAM")
-scam.t <- t.test(scam.time1$estimate, scam.time2$estimate, paired = TRUE); scam.t # reject null: there is a difference between time periods for SCAM
-
 # Add time component to dataset to incorporate time differences in model
 e.estimate$time <- NA
 for (i in 1:nrow(e.estimate)){
@@ -1209,27 +1184,26 @@ e.estimate$time <- as.factor(e.estimate$time)
 e.estimate2 <- filter(e.estimate, curve != 4 & curve != 5 & curve != 6)
 
 # Run model!
-e.mod1 <- lmer(log(estimate) ~ temp * MPA * species +
-                 (1|temp) + (1|temp:MPA) + (1|temp:MPA:species) + (1|time), data=e.estimate2,
-               control=lmerControl(optimizer="Nelder_Mead")) 
-# (1|temp) = chamber level variation; (1|temp:MPA) = variation among sets of cups across chambers; 
-# (1|temp:MPA:species) = variation among sets of cups within chambers; 
-# (1|time) accounts for potential differences across the two time collections; 
-# residual = variation in germination within cup (our response!)
-summary(e.mod1) # Check with Susan - the repetition in random effect estimates looks fishy..
+e.mod1 <- lmer(sqrt(estimate) ~ temp * MPA * species +
+                 (1|time) + (1|time:temp) + (1|time:temp:MPA), 
+               data=e.estimate2, control=lmerControl(optimizer="Nelder_Mead"))  
+summary(e.mod1) # Check with Susan - the variance seems high here; am I not accounting for a random effects factor?
 Anova(e.mod1)
-plot(e.mod1)
-simulationOutput.e.mod1 <- DHARMa::simulateResiduals(e.mod1, plot=T) # ehh, not great; better than sqrt
+plot(e.mod1) # this needs to be transformed, but I can't get any transformations work here 
+# log model doesn't converge; sqrt transformation does slightly better than none, but it's not great;
+# cubic transformation and logit transformation doesn't work
+
+simulationOutput.e.mod1 <- DHARMa::simulateResiduals(e.mod1, plot=T) 
 DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$species) 
 DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$MPA)
-DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$Temp)
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$Temp) # yikes for everything!
 
 # compare model with and without time
-e.mod2 <- lmer(log(estimate) ~ temp * MPA * species +
+e.mod2 <- lmer(sqrt(estimate) ~ temp * MPA * species +
                  (1|temp) + (1|temp:MPA) + (1|temp:MPA:species), data=e.estimate2,
                control=lmerControl(optimizer="Nelder_Mead")) 
 
-lmtest::lrtest(e.mod1,e.mod2) # time is not siginficant
+lmtest::lrtest(e.mod1,e.mod2) # time is not significant here
 
 ##Pairwise comparisons for significant interactions (temp*MPA*species)
 emmip(e.mod1, species ~ MPA|temp) 
@@ -1238,22 +1212,89 @@ emmip(e.mod1, species ~ temp|MPA)
 
 emmeans(e.mod1, pairwise ~ MPA|temp|species, adjust='tukey') 
 
-e.mod1.rg <- update(ref_grid(e.mod1), tran = "log") # back-transform from log scale
-emmeans(e.mod1.rg, ~ MPA + temp + species, type="response") # By default, 95% CIs
+e.mod1.rg <- update(ref_grid(e.mod1), tran = "sqrt") # back-transform from sqrt scale
+emmeans(e.mod1.rg, ~ MPA + temp + species, type="response") # By default, 95% CIs; what's up with these df??
 emm.e.mod1.rg <- confint(emmeans(e.mod1.rg, ~ MPA + temp + species, type="response"), adjust = "none", level = 0.68) # specify 68% CIs (roughly equivalent to +/- 1 SE)
-
-# something is not working here - I think the model optimizer is preventing estimate of SE
 
 col.pal <- c("tomato3", "cadetblue", "goldenrod")
 bw.pal <- c("gray80", "gray10", "gray40")
-t50.plot <- ggplot(data=emm.e.mod1.rg, aes(x = MPA, y = adj, shape = species, fill = species)) + 
-  geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5), alpha=0.3) +
+t50.plot <- ggplot(data=emm.e.mod1.rg, aes(x = MPA, y = response, shape = species, fill = species)) + 
+  geom_errorbar(aes(ymin=response-SE, ymax=response+SE), width = 0.3, size=0.5, position=position_dodge(width=0.5), alpha=0.3) +
   geom_line(aes(group = species, color = species, alpha=0.05), size = 1, position=position_dodge(width = 0.5)) +
   geom_point(aes(fill=species, shape=species), color="black", size=3.5, position=position_dodge(width=0.5)) +
-  ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
+  ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,35,5), limits = c(0,35)) + 
   xlab("Water potential") + facet_wrap(~temp) + scale_shape_manual(values=c(21, 23, 24)) +
   scale_fill_manual(values=col.pal, name="fill") +
   scale_color_manual(values=col.pal) + 
   theme_bw()
 t50.plot <- t50.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
 t50.plot
+
+# pull in observed data to overlay
+obs.data.pc <- ggplot(data=e.estimate, aes(x = MPA, y = estimate, fill=species)) + 
+  geom_point(aes(fill=species), alpha=0.1, pch = 21, size = 3.5, position = position_dodge(width = 0.5)) +
+  ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,35,5), limits = c(0,35)) + 
+  xlab("Water potential") + facet_wrap(~temp) +
+  scale_fill_manual(values=col.pal) + theme_bw()
+obs.data.pc <- obs.data.pc + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
+obs.data.pc <- obs.data.pc + theme(axis.title.x = element_blank(), axis.text.x = element_blank(),axis.ticks.x = element_blank(),legend.position = "none")
+obs.data.pc <- obs.data.pc + theme(axis.title.y = element_blank(), axis.text.y = element_blank(),axis.ticks.y = element_blank(), strip.text.x = element_text(size = 8))
+obs.data.pc
+
+# Merge graphs
+g1 <- ggplotGrob(t50.plot)
+g2 <- ggplotGrob(obs.data.pc)
+
+pp <- c(subset(g1$layout, grepl("panel", g1$layout$name), se = t:r))
+
+g <- gtable_add_grob(g1, g2$grobs[grepl("panel", g1$layout$name)], 
+                     pp$t, pp$l, pp$b, pp$l)
+
+hinvert_title_grob <- function(grob){
+  
+  # Swap the widths
+  widths <- grob$widths
+  grob$widths[1] <- widths[3]
+  grob$widths[3] <- widths[1]
+  grob$vp[[1]]$layout$widths[1] <- widths[3]
+  grob$vp[[1]]$layout$widths[3] <- widths[1]
+  
+  # Fix the justification
+  grob$children[[1]]$hjust <- 1 - grob$children[[1]]$hjust 
+  grob$children[[1]]$vjust <- 1 - grob$children[[1]]$vjust 
+  grob$children[[1]]$x <- unit(1, "npc") - grob$children[[1]]$x
+  grob
+}
+
+# Get the y axis title from g2
+index <- which(g2$layout$name == "ylab-l") # Which grob contains the y axis title?   EDIT HERE
+ylab <- g2$grobs[[index]]                  # Extract that grob
+ylab <- hinvert_title_grob(ylab)           # Swap margins and fix justifications
+
+g <- gtable_add_cols(g, g2$widths[g2$layout[index, ]$l], max(pp$r))
+g <- gtable_add_grob(g, ylab, max(pp$t), max(pp$r) + 1, max(pp$b), max(pp$r) + 1, clip = "off", name = "ylab-r")
+
+index <- which(g2$layout$name == "axis-l-1-1")  # Which grob.    EDIT HERE
+yaxis <- g2$grobs[[index]]                    # Extract the grob
+
+ticks <- yaxis$children[[2]]
+ticks$widths <- rev(ticks$widths)
+ticks$grobs <- rev(ticks$grobs)
+
+plot_theme <- function(p) {
+  plyr::defaults(p$theme, theme_get())
+}
+
+tml <- plot_theme(g1)$axis.ticks.length   # Tick mark length
+ticks$grobs[[1]]$x <- ticks$grobs[[1]]$x - unit(1, "npc") + tml
+
+ticks$grobs[[2]] <- hinvert_title_grob(ticks$grobs[[2]])
+
+yaxis$children[[2]] <- ticks
+
+g <- gtable_add_cols(g, g2$widths[g2$layout[index, ]$l], max(pp$r))
+g <- gtable_add_grob(g, yaxis, max(pp$t), max(pp$r) + 1, max(pp$b), max(pp$r) + 1, 
+                     clip = "off", name = "axis-r")
+
+grid.draw(g)
+#ggsave("C:/Users/egtar/Desktop/wat-pt2.png", g, width=5, height=3.5, unit="in", dpi=800)

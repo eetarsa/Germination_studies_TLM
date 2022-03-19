@@ -999,62 +999,157 @@ for (i in 1:nrow(d.estimate)){
 
 # Run model!
 d.mod1 <- lmer(qlogis(estimate) ~ temp * MPA +
-                 (1|temp) + (1|temp:MPA) + (1|pop), 
+                 (1|temp) + (1|temp:MPA:pop) + (1|pop), # unsure if this is correct
                data=d.estimate, control=lmerControl(optimizer="bobyqa"))
 
-summary(d.mod1) # Check with Susan - the repetition in random effect estimates looks fishy..
+summary(d.mod1) # Check with Susan to confirm I'm getting the random effect structure right
 Anova(d.mod1)
-plot(d.mod1) # outlier..
+plot(d.mod1) # not great, but better than other transformations (log won't run, sqrt looks worse)
 simulationOutput.d.mod1 <- DHARMa::simulateResiduals(d.mod1, plot=T) # ehh, not great; better than sqrt
-DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$pop) 
+DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$pop)
 DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$MPA)
 DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$Temp) 
 # there's quite a bit of underdispersion; overparameterizing model?
 
 # Test the significance (and visualize) source
 d.mod2 <- lmer(qlogis(estimate) ~ temp * MPA +
-                 (1|temp) + (1|temp:MPA), 
-               data=d.estimate, control=lmerControl(optimizer="bobyqa"))
+                 (1|temp) + (1|temp:MPA:pop), 
+               data=d.estimate, control=lmerControl(optimizer="Nelder_Mead"))
 lmtest::lrtest(d.mod1, d.mod2) # source is significant
-sjPlot::plot_model(d.mod1, type="re", show.p=T)
-
-ranef(d.mod2)
+sjPlot::plot_model(d.mod1, type="re", show.p=T) # see plot [[2]]
+ranef(d.mod2) 
 # https://cran.microsoft.com/snapshot/2017-04-21/web/packages/sjPlot/vignettes/sjplmer.html
-
-lattice::dotplot(ranef(d.mod1,condVar=TRUE),
-        lattice.options=list(layout=c(3,1)))
 
 # Try a random slopes model
 d.mod.rs1 <- lmer(qlogis(estimate) ~ temp * MPA +
-                 (1|temp) + (1|temp:MPA) + (temp-1|pop), # should I suppress the intercept here?
+                 (1|temp) + (1|temp:MPA:pop) + (temp||pop), # double bar to turn off covariance estimate btwn slope & intercept
                data=d.estimate, control=lmerControl(optimizer="bobyqa"))
 summary(d.mod.rs1)
-sjPlot::plot_model(d.mod.rs1, type="re", show.p=T)
+sjPlot::plot_model(d.mod.rs1, type="re", show.p=T) # this isn't working..
 # follow-up with Susan, can you do temp:MPA interaction with pop as random slopes?
 # How should I visualize (and test 'significance') of the random effect of population in my model?
 
 # Try model with populations as fixed effect
 d.mod3 <- lmer(qlogis(estimate) ~ temp * MPA * pop +
-                 (1|temp) + (1|temp:MPA) + (1|temp:MPA:pop), # I'm not sure if this last RE is necessary
+                 (1|temp) + (1|temp:MPA:pop),
                data=d.estimate, control=lmerControl(optimizer="bobyqa"))
-summary(d.mod3) # Check with Susan - the repetition in random effect estimates looks fishy..
+# (1|temp) = chamber level variation; (1|temp:MPA) = variation among sets of cups across chambers; 
+# (1|temp:MPA:pop) = variation among sets of cups within chambers; 
+# residual = variation in germination within cup (i.e., response)
+summary(d.mod3) 
 Anova(d.mod3)
-plot(d.mod1) # outlier..
-simulationOutput.d.mod1 <- DHARMa::simulateResiduals(d.mod1, plot=T) # ehh, not great; better than sqrt
-DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$pop) 
-DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$MPA)
-DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$Temp) 
+plot(d.mod3) # decent
+simulationOutput.d.mod3 <- DHARMa::simulateResiduals(d.mod3, plot=T)
+DHARMa::plotResiduals(simulationOutput.d.mod3, form = d.estimate$pop) 
+DHARMa::plotResiduals(simulationOutput.d.mod3, form = d.estimate$MPA)
+DHARMa::plotResiduals(simulationOutput.d.mod3, form = d.estimate$Temp) 
 # there's quite a bit of underdispersion; overparameterizing model?
 
-##Pairwise comparisons for significant interactions\
+## Visualize significant interactions
 emmip(d.mod3, pop ~ MPA) 
-emmip(d.mod3, pop ~ temp)
+emmip(d.mod3, pop ~ temp|MPA)
 
-## e; t50 ---- left off here 3/16/22
+emmeans(d.mod3, pairwise ~ temp|pop, adjust='tukey') 
+emmeans(d.mod3, pairwise ~ MPA|pop, adjust='tukey') 
+
+d.mod3.rg <- update(ref_grid(d.mod3), tran = "logit") # back-transform from logit scale
+emmeans(d.mod3.rg, ~ temp + pop, type="response") # By default, 95% CIs; what's up with these df??
+dmod3.RG.temp <- confint(emmeans(d.mod3.rg, ~ temp + pop, type="response"), adjust = "none", level = 0.68) # specify 68% CIs (roughly equivalent to +/- 1 SE)
+dmod3.RG.temp$adj <- dmod3.RG.temp$response * 100
+dmod3.RG.temp$adjLCL <- (dmod3.RG.temp$lower.CL)*100
+dmod3.RG.temp$adjUCL <- (dmod3.RG.temp$upper.CL)*100
+dmod3.RG.temp$adjSE <- (dmod3.RG.temp$SE)*100 
+
+col.pal <- c("tomato3", "cadetblue", "goldenrod", "seagreen4", "slateblue4")
+bw.pal <- c("gray80", "gray10", "gray40")
+germ.plot <- ggplot(data=dmod3.RG.temp, aes(x = temp, y = adj, shape = pop, fill = pop)) + 
+  geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5), alpha=0.3) +
+  geom_line(aes(group = pop, color = pop, alpha=0.05), size = 1, position=position_dodge(width = 0.5)) +
+  geom_point(aes(fill=pop, shape=pop), color="black", size=3.5, position=position_dodge(width=0.5)) +
+  ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
+  xlab("Temperature") + scale_shape_manual(values=c(21, 22, 23, 24, 25)) +
+  scale_fill_manual(values=col.pal, name="fill") +
+  scale_color_manual(values=col.pal) + 
+  theme_bw()
+germ.plot <- germ.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
+germ.plot
+
+# pull in observed data to overlay
+d.estimate$adj <- d.estimate$estimate * 100
+obs.data.pc <- ggplot(data=d.estimate, aes(x = temp, y = adj, fill=pop)) + 
+  geom_point(aes(fill=pop), alpha=0.1, pch = 21, size = 3.5, position = position_dodge(width = 0.5)) +
+  ylab("Maximum germination (%)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
+  xlab("Temperature") + 
+  scale_fill_manual(values=col.pal) + theme_bw()
+obs.data.pc <- obs.data.pc + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
+obs.data.pc <- obs.data.pc + theme(axis.title.x = element_blank(), axis.text.x = element_blank(),axis.ticks.x = element_blank(),legend.position = "none")
+obs.data.pc <- obs.data.pc + theme(axis.title.y = element_blank(), axis.text.y = element_blank(),axis.ticks.y = element_blank(), strip.text.x = element_text(size = 8))
+obs.data.pc
+
+# Merge graphs
+g1 <- ggplotGrob(germ.plot)
+g2 <- ggplotGrob(obs.data.pc)
+
+pp <- c(subset(g1$layout, grepl("panel", g1$layout$name), se = t:r))
+
+g <- gtable_add_grob(g1, g2$grobs[grepl("panel", g1$layout$name)], 
+                     pp$t, pp$l, pp$b, pp$l)
+
+hinvert_title_grob <- function(grob){
+  
+  # Swap the widths
+  widths <- grob$widths
+  grob$widths[1] <- widths[3]
+  grob$widths[3] <- widths[1]
+  grob$vp[[1]]$layout$widths[1] <- widths[3]
+  grob$vp[[1]]$layout$widths[3] <- widths[1]
+  
+  # Fix the justification
+  grob$children[[1]]$hjust <- 1 - grob$children[[1]]$hjust 
+  grob$children[[1]]$vjust <- 1 - grob$children[[1]]$vjust 
+  grob$children[[1]]$x <- unit(1, "npc") - grob$children[[1]]$x
+  grob
+}
+
+# Get the y axis title from g2
+index <- which(g2$layout$name == "ylab-l") # Which grob contains the y axis title?   EDIT HERE
+ylab <- g2$grobs[[index]]                  # Extract that grob
+ylab <- hinvert_title_grob(ylab)           # Swap margins and fix justifications
+
+g <- gtable_add_cols(g, g2$widths[g2$layout[index, ]$l], max(pp$r))
+g <- gtable_add_grob(g, ylab, max(pp$t), max(pp$r) + 1, max(pp$b), max(pp$r) + 1, clip = "off", name = "ylab-r")
+
+index <- which(g2$layout$name == "axis-l-1-1")  # Which grob.    EDIT HERE
+yaxis <- g2$grobs[[index]]                    # Extract the grob
+
+ticks <- yaxis$children[[2]]
+ticks$widths <- rev(ticks$widths)
+ticks$grobs <- rev(ticks$grobs)
+
+plot_theme <- function(p) {
+  plyr::defaults(p$theme, theme_get())
+}
+
+tml <- plot_theme(g1)$axis.ticks.length   # Tick mark length
+ticks$grobs[[1]]$x <- ticks$grobs[[1]]$x - unit(1, "npc") + tml
+
+ticks$grobs[[2]] <- hinvert_title_grob(ticks$grobs[[2]])
+
+yaxis$children[[2]] <- ticks
+
+g <- gtable_add_cols(g, g2$widths[g2$layout[index, ]$l], max(pp$r))
+g <- gtable_add_grob(g, yaxis, max(pp$t), max(pp$r) + 1, max(pp$b), max(pp$r) + 1, 
+                     clip = "off", name = "axis-r")
+
+grid.draw(g)
+#ggsave("C:/Users/egtar/Desktop/wat-pt2.png", g, width=5, height=3.5, unit="in", dpi=800)
+
+
+## e; t50 ---- 
 e.estimate <- filter(germ.met.all, term == "e")
-hist(log(e.estimate$estimate))
+hist(log(e.estimate$estimate)) # big dip in middle...
 
-ggplot(e.estimate, aes(x=species, y=estimate)) +
+ggplot(e.estimate, aes(x=pop, y=estimate)) +
   geom_boxplot(outlier.shape = NA) + geom_jitter() +
   facet_wrap (~temp*MPA)
 
@@ -1062,86 +1157,64 @@ for (i in 1:nrow(e.estimate)){
   if (e.estimate$estimate[i] == 0.00000000) e.estimate$estimate[i] <-  0.0005
 }
 
-# Look at paired t-test between 0 MPA at time 1 & 2; if not different, drop reps 4-6 of 0 MPA for models
-# calculate t-test for MPA0 across data collection periods
-time1 <- filter(e.estimate, MPA == 0 & curve != 4 & curve != 5 & curve != 6)
-time2 <- filter(e.estimate, MPA == 0 & curve != 1 & curve != 2 & curve != 3)
-all.time <- rbind(time1,time2)
-ggplot(all.time, aes(x=curve, y=estimate, color=species)) +
-  geom_point()
-
-phau.time1 <- filter(time1, species == "PHAU")
-phau.time2 <- filter(time2, species == "PHAU")
-phau.t <- t.test(phau.time1$estimate, phau.time2$estimate, paired = TRUE); phau.t # accept null: no difference between time periods for PHAU
-
-scac.time1 <- filter(time1, species == "SCAC")
-scac.time2 <- filter(time2, species == "SCAC")
-scac.t <- t.test(scac.time1$estimate, scac.time2$estimate, paired = TRUE); scac.t # reject null: there is a difference between time periods for SCAM
-
-scam.time1 <- filter(time1, species == "SCAM")
-scam.time2 <- filter(time2, species == "SCAM")
-scam.t <- t.test(scam.time1$estimate, scam.time2$estimate, paired = TRUE); scam.t # reject null: there is a difference between time periods for SCAM
-
-# Add time component to dataset to incorporate time differences in model
-e.estimate$time <- NA
-for (i in 1:nrow(e.estimate)){
-  if (e.estimate$MPA[i] == -1.2 | e.estimate$MPA[i] == -0.6){
-    e.estimate$time[i] <-  2
-  }else{
-    e.estimate$time[i] <-  1
-  }
-}
-e.estimate$time <- as.factor(e.estimate$time)
-
-# drop reps 4-6 (will account for time as a random effect)
-e.estimate2 <- filter(e.estimate, curve != 4 & curve != 5 & curve != 6)
-
 # Run model!
-e.mod1 <- lmer(log(estimate) ~ temp * MPA * species +
-                 (1|temp) + (1|temp:MPA) + (1|temp:MPA:species) + (1|time), data=e.estimate2,
-               control=lmerControl(optimizer="Nelder_Mead")) 
-# (1|temp) = chamber level variation; (1|temp:MPA) = variation among sets of cups across chambers; 
-# (1|temp:MPA:species) = variation among sets of cups within chambers; 
-# (1|time) accounts for potential differences across the two time collections; 
-# residual = variation in germination within cup (our response!)
-summary(e.mod1) # Check with Susan - the repetition in random effect estimates looks fishy..
+e.mod1 <- lmer(log(estimate) ~ temp * MPA +
+                 (1|temp) + (1|temp:MPA:pop) + (1|pop), # unsure if this is correct
+               data=e.estimate, control=lmerControl(optimizer="bobyqa"))
+
+summary(e.mod1) # Check with Susan to confirm I'm getting the random effect structure right
 Anova(e.mod1)
-plot(e.mod1)
-simulationOutput.e.mod1 <- DHARMa::simulateResiduals(e.mod1, plot=T) # ehh, not great; better than sqrt
-DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$species) 
-DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$MPA)
-DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$Temp)
+plot(e.mod1) # okay..
+simulationOutput.e.mod1 <- DHARMa::simulateResiduals(e.mod1, plot=T) # pretty good
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$pop) # wow that's not good; a lot of variance in population 
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$MPA)
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$Temp) 
 
-# compare model with and without time
-e.mod2 <- lmer(log(estimate) ~ temp * MPA * species +
-                 (1|temp) + (1|temp:MPA) + (1|temp:MPA:species), data=e.estimate2,
-               control=lmerControl(optimizer="Nelder_Mead")) 
+# Test the significance (and visualize) source
+e.mod2 <- lmer(log(estimate) ~ temp * MPA +
+                 (1|temp) + (1|temp:MPA:pop), 
+               data=e.estimate, control=lmerControl(optimizer="bobyqa"))
+lmtest::lrtest(e.mod1, e.mod2) # source is significant
+sjPlot::plot_model(e.mod1, type="re", show.p=T) # see plot [[2]]
+ranef(d.mod2) 
+# https://cran.microsoft.com/snapshot/2017-04-21/web/packages/sjPlot/vignettes/sjplmer.html
 
-lmtest::lrtest(e.mod1,e.mod2) # time is not siginficant
+# Try a random slopes model
+e.mod.rs1 <- lmer(log(estimate) ~ temp * MPA +
+                    (1|temp) + (1|temp:MPA:pop) + (temp|pop), 
+                  data=e.estimate, control=lmerControl(optimizer="bobyqa"))
+summary(e.mod.rs1)
+sjPlot::plot_model(e.mod.rs1, type="re", show.p=T) # this does not work when you turn off covariance estimates with || in model
+sjPlot::plot_model(e.mod.rs1,type="pred",
+                  terms=c("temp","pop"),pred.type="re") # not really an interaction here..
+# follow-up with Susan, can you do temp:MPA interaction with pop as random slopes?
+# How should I visualize (and test 'significance') of the random effect of population in my model?
 
-##Pairwise comparisons for significant interactions (temp*MPA*species)
-emmip(e.mod1, species ~ MPA|temp) 
-emmip(e.mod1, species ~ temp|MPA) 
-# https://stackoverflow.com/questions/67338560/zeroinfl-model-warning-message-in-sqrtdiagobjectvcov-nans-produced
+e.mod.rs3 <- lmer(log(estimate) ~ temp * MPA +
+                    (1|temp) + (1|temp:MPA:pop) + (MPA|pop), 
+                  data=e.estimate, control=lmerControl(optimizer="bobyqa"))
+summary(e.mod.rs3)
+sjPlot::plot_model(e.mod.rs3, type="re", show.p=T) # this does not work when you turn off covariance estimates with || in model
+sjPlot::plot_model(e.mod.rs3,type="pred",
+                   terms=c("MPA","pop"),pred.type="re") # definitely does not seem to be an interaction here
 
-emmeans(e.mod1, pairwise ~ MPA|temp|species, adjust='tukey') 
+# Try model with populations as fixed effect
+e.mod3 <- lmer(log(estimate) ~ temp * MPA * pop +
+                 (1|temp) + (1|temp:MPA:pop),
+               data=e.estimate, control=lmerControl(optimizer="bobyqa"))
+# (1|temp) = chamber level variation; (1|temp:MPA) = variation among sets of cups across chambers; 
+# (1|temp:MPA:pop) = variation among sets of cups within chambers; 
+# residual = variation in germination within cup (i.e., response)
+summary(e.mod3) 
+Anova(e.mod3) # strange, not the results I would have expected; there's variation in pop germination, but it's not attributed to temp or MPA (or temp*MPA)??
+plot(e.mod3) # decent
+simulationOutput.e.mod3 <- DHARMa::simulateResiduals(d.mod3, plot=T)
+DHARMa::plotResiduals(simulationOutput.e.mod3, form = e.estimate$pop) 
+DHARMa::plotResiduals(simulationOutput.e.mod3, form = e.estimate$MPA)
+DHARMa::plotResiduals(simulationOutput.e.mod3, form = e.estimate$Temp) 
 
-e.mod1.rg <- update(ref_grid(e.mod1), tran = "log") # back-transform from log scale
-emmeans(e.mod1.rg, ~ MPA + temp + species, type="response") # By default, 95% CIs
-emm.e.mod1.rg <- confint(emmeans(e.mod1.rg, ~ MPA + temp + species, type="response"), adjust = "none", level = 0.68) # specify 68% CIs (roughly equivalent to +/- 1 SE)
+## Visualize significant interactions
+emmip(e.mod3, ~ pop) 
+emmip(e.mod3, ~ temp)
+emmip(e.mod3, ~ MPA)
 
-# something is not working here - I think the model optimizer is preventing estimate of SE
-
-col.pal <- c("tomato3", "cadetblue", "goldenrod")
-bw.pal <- c("gray80", "gray10", "gray40")
-t50.plot <- ggplot(data=emm.e.mod1.rg, aes(x = MPA, y = adj, shape = species, fill = species)) + 
-  geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5), alpha=0.3) +
-  geom_line(aes(group = species, color = species, alpha=0.05), size = 1, position=position_dodge(width = 0.5)) +
-  geom_point(aes(fill=species, shape=species), color="black", size=3.5, position=position_dodge(width=0.5)) +
-  ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
-  xlab("Water potential") + facet_wrap(~temp) + scale_shape_manual(values=c(21, 23, 24)) +
-  scale_fill_manual(values=col.pal, name="fill") +
-  scale_color_manual(values=col.pal) + 
-  theme_bw()
-t50.plot <- t50.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
-t50.plot
