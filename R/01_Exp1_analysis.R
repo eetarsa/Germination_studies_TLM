@@ -32,6 +32,9 @@ library(knitr)
 library(markdown)
 library(gtable)
 
+# Change contrast options
+options(contrast = c("contr.sum", "contr.poly"))
+
 # Load cleaned (non-cumulative) germination data ----
 phau.exp1 <- read.csv("./data/exp1_PHAU_noncum.csv", as.is=T)
 scac.exp1 <- read.csv("./data/exp1_SCAC_noncum.csv", as.is=T)
@@ -1006,7 +1009,7 @@ e.g2 <- ggplot(filter(gmet.stats, term == "e"), aes(x=MPA, y=mean, fill = temp))
 # Statistical models ----
 ## d; max germ ----
 d.estimate <- filter(germ.met.all, term == "d")
-hist(qlogis(d.estimate$estimate))
+hist(qlogis(d.estimate$estimate)) # this is of limited use, distribution of response conditional on predictors
 
 for (i in 1:nrow(d.estimate)){
   if (d.estimate$estimate[i] == 0.00000000) d.estimate$estimate[i] <-  0.0005
@@ -1015,54 +1018,75 @@ for (i in 1:nrow(d.estimate)){
 # Add time component to dataset to incorporate time differences in model
 d.estimate$time <- NA
 for (i in 1:nrow(d.estimate)){
-  if (d.estimate$MPA[i] == -1.2 | d.estimate$MPA[i] == -0.6){
-       d.estimate$time[i] <-  2
+  if (d.estimate$MPA[i] == -1.2 | d.estimate$MPA[i] == -0.6 | d.estimate$curve[i] %in% c(4,5,6)){
+    d.estimate$time[i] <-  2
   }else{
     d.estimate$time[i] <-  1
   }
 }
 d.estimate$time <- as.factor(d.estimate$time)
+with(d.estimate,table(MPA,time))
 
-# drop reps 4-6 (will account for time as a random effect) - can't compare MPA with 6 reps (0MPA) to all others that have 3 reps
-d.estimate2 <- filter(d.estimate, curve != 4 & curve != 5 & curve != 6)
+# Look at MPA 0
+d.estimate.MPA0 <- filter(d.estimate, MPA == 0)
+time.mod <- lmer(qlogis(estimate) ~ (temp * species) + (time * species) +
+                   (1|temp:time) + (1|temp:time:species), 
+                 data=d.estimate.MPA0, control=lmerControl(optimizer="Nelder_Mead")) 
+summary(time.mod)
+Anova(time.mod)
+emmeans(time.mod, ~ time)
+
+ggplot(d.estimate.MPA0, aes(x=temp, y=estimate, color=time)) +
+  geom_jitter(height=0, width=0.1, alpha=0.4) +  
+  facet_wrap(~time + species)
+
+ggplot(d.estimate.MPA0, aes(x=as.numeric(temp), y=estimate, color=time)) +
+  geom_jitter(height=0, width=0.1, alpha=0.4) +  
+  facet_wrap(~species) +
+  geom_smooth()
+
+time.mod2 <- lmer(qlogis(estimate) ~ (temp * species) +
+                   (1|time) + (1|temp:time) + (1|temp:time:species), 
+                 data=d.estimate.MPA0, control=lmerControl(optimizer="Nelder_Mead")) 
+summary(time.mod2) # there is a time effect, estimates for MPA0 is higher at T1 relative to T2, we don't know if this applies to other MPAs
+Anova(time.mod2)
 
 # Run model!
 d.mod1 <- lmer(qlogis(estimate) ~ temp * MPA * species +
-               (1|time) + (1|time:temp) + (1|time:temp:MPA), 
-               data=d.estimate2, control=lmerControl(optimizer="Nelder_Mead")) 
-# (1|time) = variation 2 data collection time periods; 
+               (1|time:temp) + (1|time:temp:MPA:species), 
+               data=d.estimate, control=lmerControl(optimizer="Nelder_Mead")) 
 # (1|temp:time) = chamber level variation within each time period;
 # (1|time:temp:MPA) = variation among sets of boxes within chambers and time periods; 
-# I don't think I need anything like this in here (1|time:temp:MPA:species)
-    # WP and species are both at the box level (time:temp:MPA); within box level is residual (response)
-# residual = variation in germination within box (our response!)
-
-summary(d.mod1) # Check with Susan - the repetition in random effect estimates looks fishy..
-#  the number of observations looks correct (1 replicate was dropped, 180-1=179), do I need (1|time:temp:MPA:species) - no that would be 180 (my residual)
+summary(d.mod1)
 Anova(d.mod1)
 plot(d.mod1) # outlier.. 
 # Try to find outlier
 ggplot(d.estimate, aes(x=scale(as.numeric(MPA)), y=scale(qlogis(estimate)), color=species)) +
   geom_point() + facet_wrap(~as.numeric(temp)) # outlier - SCAM temp 23 where no germination occured - don't want to drop this outlier bcs it is an important data point
 
-simulationOutput.d.mod1 <- DHARMa::simulateResiduals(d.mod1, plot=T) # ehh, not great; better than sqrt trans
-DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate2$species) 
-DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate2$MPA)
-DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate2$Temp) 
-# there's quite a bit of underdispersion; am I overparameterizing model?
+simulationOutput.d.mod1 <- DHARMa::simulateResiduals(d.mod1, plot=T) 
+DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$species) 
+DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$MPA)
+DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$Temp) 
 
-# compare model with and without time
-d.mod2 <- lmer(log(estimate) ~ temp * MPA * species +
-                 (1|temp) + (1|temp:MPA) + (1|temp:MPA:species), data=e.estimate2,
-               control=lmerControl(optimizer="Nelder_Mead")) 
-
-lmtest::lrtest(d.mod1,d.mod2) # time is significant - how should I proceed here?
+# Try beta distributed model
+d.mod2 = glmmTMB::glmmTMB(estimate ~ temp * MPA * species + 
+                         (1|time:temp) + (1|time:temp:MPA:species), 
+                         data = d.estimate, beta_family(link="logit"))
+summary(d.mod2)
+Anova(d.mod2)
+simulationOutput.d.mod2 <- DHARMa::simulateResiduals(d.mod2, plot=T) 
+DHARMa::plotResiduals(simulationOutput.d.mod2, form = d.estimate$species) 
+DHARMa::plotResiduals(simulationOutput.d.mod2, form = d.estimate$MPA)
+DHARMa::plotResiduals(simulationOutput.d.mod2, form = d.estimate$Temp)
 
 ##Pairwise comparisons for significant interactions (temp*MPA*species)
-emmip(d.mod1, species ~ MPA|temp) 
-emmip(d.mod1, species ~ temp|MPA)
+emmip(d.mod2, species ~ MPA|temp) 
+emmip(d.mod2, species ~ temp|MPA)
+emmip(d.mod2, temp ~ MPA|species)
 
-emmeans(d.mod1, pairwise ~ MPA|temp|species, adjust='tukey') 
+d.emm1.1 <- emmeans(d.mod2, pairwise ~ MPA|temp|species, adjust='tukey', type = "response") 
+d.emm1.2 <- emmeans(d.mod2, pairwise ~ temp|species|MPA, adjust='tukey', type = "response") 
 
 d.mod1.rg <- update(ref_grid(d.mod1), tran = "logit") # back-transform from logit scale
 emmeans(d.mod1.rg, ~ MPA + temp + species, type="response") # By default, 95% CIs
@@ -1071,36 +1095,62 @@ emm.d.mod1.rg$adj <- (emm.d.mod1.rg$response)*100
 emm.d.mod1.rg$adjLCL <- (emm.d.mod1.rg$lower.CL)*100
 emm.d.mod1.rg$adjUCL <- (emm.d.mod1.rg$upper.CL)*100
 emm.d.mod1.rg$adjSE <- (emm.d.mod1.rg$SE)*100
+plot(emm.d.mod1.rg)
 
 col.pal <- c("tomato3", "cadetblue", "goldenrod")
 bw.pal <- c("gray80", "gray10", "gray40")
-max.germ.plot <- ggplot(data=emm.d.mod1.rg, aes(x = MPA, y = adj, shape = species, fill = species)) + 
-  geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5), alpha=0.3) +
-  geom_line(aes(group = species, color = species, alpha=0.05), size = 1, position=position_dodge(width = 0.5)) +
-  geom_point(aes(fill=species, shape=species), color="black", size=2.5, position=position_dodge(width=0.5)) +
+max.germ.plot <- ggplot(data=emm.d.mod1.rg, aes(x = MPA, y = adj, fill = species)) + 
+  geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5)) +
+  geom_line(aes(group = species, color = species), size = 1, position=position_dodge(width = 0.5)) +
+  geom_point(aes(fill=species), pch=21, color="black", size=3.5, position=position_dodge(width=0.5)) +
   ylab("Maximum germination (%)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
-  xlab("Water potential") + facet_wrap(~temp) + scale_shape_manual(values=c(21, 23, 24)) +
+  xlab("Water potential (MPA)") + facet_wrap(~temp) + 
   scale_fill_manual(values=col.pal, name="fill") +
   scale_color_manual(values=col.pal) + 
   theme_bw()
 max.germ.plot <- max.germ.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
 max.germ.plot
 
+max.germ.plot2 <- ggplot(data=emm.d.mod1.rg, aes(x = temp, y = adj, fill = species)) + 
+  geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5)) +
+  geom_line(aes(group = species, color = species), size = 1, position=position_dodge(width = 0.5)) +
+  geom_point(aes(fill=species), pch=21, color="black", size=3.5, position=position_dodge(width=0.5)) +
+  ylab("Maximum germination (%)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
+  xlab("Temperature") + facet_wrap(~MPA) + 
+  scale_fill_manual(values=col.pal, name="fill") +
+  scale_color_manual(values=col.pal) + 
+  theme_bw()
+max.germ.plot2 <- max.germ.plot2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
+max.germ.plot2
+
+col.pal2 <- c("cadetblue","seagreen4","goldenrod","tomato3")
+max.germ.plot3 <- ggplot(data=emm.d.mod1.rg, aes(x = MPA, y = adj, fill = temp)) + 
+  geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5)) +
+  geom_line(aes(group = temp, color = temp), size = 1, position=position_dodge(width = 0.5)) +
+  geom_point(aes(fill=temp), pch=21, color="black", size=3.5, position=position_dodge(width=0.5)) +
+  ylab("Maximum germination (%)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
+  xlab("Water potential") + facet_wrap(~species) + 
+  scale_fill_manual(values=col.pal2, name="fill") +
+  scale_color_manual(values=col.pal2) + 
+  theme_bw()
+max.germ.plot3 <- max.germ.plot3 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
+max.germ.plot3
+
 # pull in observed data to overlay
 d.estimate$adj <- d.estimate$estimate * 100
 
-obs.data.pc <- ggplot(data=d.estimate, aes(x = MPA, y = adj, fill=species)) + 
-  geom_point(aes(fill=species), alpha=0.1, pch = 21, size = 3.5, position = position_dodge(width = 0.5)) +
+obs.data.pc <- ggplot(data=d.estimate, aes(x = MPA, y = adj, fill=temp)) + 
+  geom_point(aes(fill=temp), alpha=0.1, pch = 21, size = 3.5, position = position_dodge(width = 0.5)) +
   ylab("Maximum germination (%)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
-  xlab("Water potential") + facet_wrap(~temp) +
-  scale_fill_manual(values=col.pal) + theme_bw()
+  xlab("Water potential (MPA)") + facet_wrap(~species) +
+  scale_fill_manual(values=col.pal2) + theme_bw()
 obs.data.pc <- obs.data.pc + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
 obs.data.pc <- obs.data.pc + theme(axis.title.x = element_blank(), axis.text.x = element_blank(),axis.ticks.x = element_blank(),legend.position = "none")
 obs.data.pc <- obs.data.pc + theme(axis.title.y = element_blank(), axis.text.y = element_blank(),axis.ticks.y = element_blank(), strip.text.x = element_text(size = 8))
 obs.data.pc
 
 # Merge graphs
-g1 <- ggplotGrob(max.germ.plot)
+g1 <- ggplotGrob(max.germ.plot3)
 g2 <- ggplotGrob(obs.data.pc)
 
 pp <- c(subset(g1$layout, grepl("panel", g1$layout$name), se = t:r))
@@ -1155,7 +1205,7 @@ g <- gtable_add_grob(g, yaxis, max(pp$t), max(pp$r) + 1, max(pp$b), max(pp$r) + 
                      clip = "off", name = "axis-r")
 
 grid.draw(g)
-#ggsave("C:/Users/egtar/Desktop/wat-pt2.png", g, width=5, height=3.5, unit="in", dpi=800)
+#ggsave("./output/Exp1_byspp_maxgerm.png", g, width=8, height=5, unit="in", dpi=800)
 
 ## e; t50 ----
 e.estimate <- filter(germ.met.all, term == "e")
@@ -1180,61 +1230,61 @@ for (i in 1:nrow(e.estimate)){
 }
 e.estimate$time <- as.factor(e.estimate$time)
 
-# drop reps 4-6 (will account for time as a random effect)
-e.estimate2 <- filter(e.estimate, curve != 4 & curve != 5 & curve != 6)
-
 # Run model!
-e.mod1 <- lmer(sqrt(estimate) ~ temp * MPA * species +
-                 (1|time) + (1|time:temp) + (1|time:temp:MPA), 
-               data=e.estimate2, control=lmerControl(optimizer="Nelder_Mead"))  
-summary(e.mod1) # Check with Susan - the variance seems high here; am I not accounting for a random effects factor?
+e.mod1 <- lmer(log(estimate) ~ temp * MPA * species +
+                 (1|time:temp) + (1|time:temp:MPA:species), 
+               data=e.estimate)  
+summary(e.mod1) 
 Anova(e.mod1)
-plot(e.mod1) # this needs to be transformed, but I can't get any transformations work here 
-# log model doesn't converge; sqrt transformation does slightly better than none, but it's not great;
-# cubic transformation and logit transformation doesn't work
+plot(e.mod1)
 
-simulationOutput.e.mod1 <- DHARMa::simulateResiduals(e.mod1, plot=T) 
-DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$species) 
-DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$MPA)
-DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate2$Temp) # yikes for everything!
-
-# compare model with and without time
-e.mod2 <- lmer(sqrt(estimate) ~ temp * MPA * species +
-                 (1|temp) + (1|temp:MPA) + (1|temp:MPA:species), data=e.estimate2,
-               control=lmerControl(optimizer="Nelder_Mead")) 
-
-lmtest::lrtest(e.mod1,e.mod2) # time is not significant here
+simulationOutput.e.mod1 <- DHARMa::simulateResiduals(e.mod1, plot=T)
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$species) 
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$MPA)
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$Temp) 
 
 ##Pairwise comparisons for significant interactions (temp*MPA*species)
 emmip(e.mod1, species ~ MPA|temp) 
 emmip(e.mod1, species ~ temp|MPA) 
-# https://stackoverflow.com/questions/67338560/zeroinfl-model-warning-message-in-sqrtdiagobjectvcov-nans-produced
+emmip(e.mod1, temp ~ MPA|species)
 
 emmeans(e.mod1, pairwise ~ MPA|temp|species, adjust='tukey') 
 
-e.mod1.rg <- update(ref_grid(e.mod1), tran = "sqrt") # back-transform from sqrt scale
+e.mod1.rg <- update(ref_grid(e.mod1), tran = "log") # back-transform from log scale
 emmeans(e.mod1.rg, ~ MPA + temp + species, type="response") # By default, 95% CIs; what's up with these df??
 emm.e.mod1.rg <- confint(emmeans(e.mod1.rg, ~ MPA + temp + species, type="response"), adjust = "none", level = 0.68) # specify 68% CIs (roughly equivalent to +/- 1 SE)
 
 col.pal <- c("tomato3", "cadetblue", "goldenrod")
 bw.pal <- c("gray80", "gray10", "gray40")
-t50.plot <- ggplot(data=emm.e.mod1.rg, aes(x = MPA, y = response, shape = species, fill = species)) + 
-  geom_errorbar(aes(ymin=response-SE, ymax=response+SE), width = 0.3, size=0.5, position=position_dodge(width=0.5), alpha=0.3) +
-  geom_line(aes(group = species, color = species, alpha=0.05), size = 1, position=position_dodge(width = 0.5)) +
-  geom_point(aes(fill=species, shape=species), color="black", size=3.5, position=position_dodge(width=0.5)) +
+t50.plot <- ggplot(data=emm.e.mod1.rg, aes(x = MPA, y = response, fill = species)) + 
+  geom_errorbar(aes(ymin=response-SE, ymax=response+SE), width = 0.3, size=0.5, position=position_dodge(width=0.5)) +
+  geom_line(aes(group = species, color = species), size = 1, position=position_dodge(width = 0.5)) +
+  geom_point(aes(fill=species), pch=21, color="black", size=3.5, position=position_dodge(width=0.5)) +
   ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,35,5), limits = c(0,35)) + 
-  xlab("Water potential") + facet_wrap(~temp) + scale_shape_manual(values=c(21, 23, 24)) +
+  xlab("Water potential (MPA)") + facet_wrap(~temp) +
   scale_fill_manual(values=col.pal, name="fill") +
   scale_color_manual(values=col.pal) + 
   theme_bw()
 t50.plot <- t50.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
 t50.plot
 
+t50.plot2 <- ggplot(data=emm.e.mod1.rg, aes(x = temp, y = response, fill = species)) + 
+  geom_errorbar(aes(ymin=response-SE, ymax=response+SE), width = 0.3, size=0.5, position=position_dodge(width=0.5)) +
+  geom_line(aes(group = species, color = species), size = 1, position=position_dodge(width = 0.5)) +
+  geom_point(aes(fill=species), pch=21, color="black", size=3.5, position=position_dodge(width=0.5)) +
+  ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,35,5), limits = c(0,35)) + 
+  xlab("Temperature") + facet_wrap(~MPA) +
+  scale_fill_manual(values=col.pal, name="fill") +
+  scale_color_manual(values=col.pal) + 
+  theme_bw()
+t50.plot2 <- t50.plot2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
+t50.plot2
+
 # pull in observed data to overlay
-obs.data.pc <- ggplot(data=e.estimate, aes(x = MPA, y = estimate, fill=species)) + 
+obs.data.pc <- ggplot(data=e.estimate, aes(x = temp, y = estimate, fill=species)) + 
   geom_point(aes(fill=species), alpha=0.1, pch = 21, size = 3.5, position = position_dodge(width = 0.5)) +
   ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,35,5), limits = c(0,35)) + 
-  xlab("Water potential") + facet_wrap(~temp) +
+  xlab("Temperature") + facet_wrap(~MPA) +
   scale_fill_manual(values=col.pal) + theme_bw()
 obs.data.pc <- obs.data.pc + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
 obs.data.pc <- obs.data.pc + theme(axis.title.x = element_blank(), axis.text.x = element_blank(),axis.ticks.x = element_blank(),legend.position = "none")
@@ -1242,7 +1292,7 @@ obs.data.pc <- obs.data.pc + theme(axis.title.y = element_blank(), axis.text.y =
 obs.data.pc
 
 # Merge graphs
-g1 <- ggplotGrob(t50.plot)
+g1 <- ggplotGrob(t50.plot2)
 g2 <- ggplotGrob(obs.data.pc)
 
 pp <- c(subset(g1$layout, grepl("panel", g1$layout$name), se = t:r))
@@ -1297,4 +1347,4 @@ g <- gtable_add_grob(g, yaxis, max(pp$t), max(pp$r) + 1, max(pp$b), max(pp$r) + 
                      clip = "off", name = "axis-r")
 
 grid.draw(g)
-#ggsave("C:/Users/egtar/Desktop/wat-pt2.png", g, width=5, height=3.5, unit="in", dpi=800)
+#ggsave("./output/Exp1_tempx_t50.png", g, width=8, height=5, unit="in", dpi=800)
