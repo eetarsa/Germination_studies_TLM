@@ -999,17 +999,18 @@ for (i in 1:nrow(d.estimate)){
 
 # Run model!
 d.mod1 <- lmer(qlogis(estimate) ~ temp * MPA +
-                 (1|temp) + (1|temp:MPA:pop) + (1|pop), # unsure if this is correct
+                 (1|pop), 
                data=d.estimate, control=lmerControl(optimizer="bobyqa"))
 
-summary(d.mod1) # Check with Susan to confirm I'm getting the random effect structure right
+summary(d.mod1) 
 Anova(d.mod1)
-plot(d.mod1) # not great, but better than other transformations (log won't run, sqrt looks worse)
+plot(d.mod1) # not great, but better than other transformations (log & sqrt looks worse)
 simulationOutput.d.mod1 <- DHARMa::simulateResiduals(d.mod1, plot=T) # ehh, not great; better than sqrt
-DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$pop)
+DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$pop) # wow!
 DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$MPA)
-DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$Temp) 
-# there's quite a bit of underdispersion; overparameterizing model?
+DHARMa::plotResiduals(simulationOutput.d.mod1, form = d.estimate$temp) 
+emmip(d.mod1, temp ~ MPA)
+emmip(d.mod1, MPA ~ temp)
 
 # Test the significance (and visualize) source
 d.mod2 <- lmer(qlogis(estimate) ~ temp * MPA +
@@ -1020,41 +1021,49 @@ sjPlot::plot_model(d.mod1, type="re", show.p=T) # see plot [[2]]
 ranef(d.mod2) 
 # https://cran.microsoft.com/snapshot/2017-04-21/web/packages/sjPlot/vignettes/sjplmer.html
 
-# Try a random slopes model
-d.mod.rs1 <- lmer(qlogis(estimate) ~ temp * MPA +
-                 (1|temp) + (1|temp:MPA:pop) + (temp||pop), # double bar to turn off covariance estimate btwn slope & intercept
-               data=d.estimate, control=lmerControl(optimizer="bobyqa"))
-summary(d.mod.rs1)
-sjPlot::plot_model(d.mod.rs1, type="re", show.p=T) # this isn't working..
-# follow-up with Susan, can you do temp:MPA interaction with pop as random slopes?
-# How should I visualize (and test 'significance') of the random effect of population in my model?
-
+####
 # Try model with populations as fixed effect
-d.mod3 <- lmer(qlogis(estimate) ~ temp * MPA * pop +
-                 (1|temp) + (1|temp:MPA:pop),
-               data=d.estimate, control=lmerControl(optimizer="bobyqa"))
+d.mod3 <- lm(qlogis(estimate) ~ temp * MPA * pop,
+               data=d.estimate) # look at 3-way here
 # (1|temp) = chamber level variation; (1|temp:MPA) = variation among sets of cups across chambers; 
 # (1|temp:MPA:pop) = variation among sets of cups within chambers; 
 # residual = variation in germination within cup (i.e., response)
 summary(d.mod3) 
 Anova(d.mod3)
-plot(d.mod3) # decent
+plot(d.mod3) 
+emmip(d.mod3, MPA ~ temp|pop) 
+
 simulationOutput.d.mod3 <- DHARMa::simulateResiduals(d.mod3, plot=T)
 DHARMa::plotResiduals(simulationOutput.d.mod3, form = d.estimate$pop) 
 DHARMa::plotResiduals(simulationOutput.d.mod3, form = d.estimate$MPA)
-DHARMa::plotResiduals(simulationOutput.d.mod3, form = d.estimate$Temp) 
-# there's quite a bit of underdispersion; overparameterizing model?
+DHARMa::plotResiduals(simulationOutput.d.mod3, form = d.estimate$Temp)
+
+# Beta distributed model
+# Try beta distributed model
+d.mod2 = glmmTMB::glmmTMB(estimate ~ temp * MPA * pop, 
+                          data = d.estimate, beta_family(link="logit"))
+summary(d.mod2)
+Anova(d.mod2)
+simulationOutput.d.mod2 <- DHARMa::simulateResiduals(d.mod2, plot=T) 
+DHARMa::plotResiduals(simulationOutput.d.mod2, form = d.estimate$species) 
+DHARMa::plotResiduals(simulationOutput.d.mod2, form = d.estimate$MPA)
+DHARMa::plotResiduals(simulationOutput.d.mod2, form = d.estimate$Temp)
 
 ## Visualize significant interactions
-emmip(d.mod3, pop ~ MPA) 
-emmip(d.mod3, pop ~ temp|MPA)
+emmip(d.mod2, pop ~ MPA|temp) 
+emmip(d.mod2, pop ~ temp|MPA) 
+emmip(d.mod2, temp ~ MPA|pop) 
 
-emmeans(d.mod3, pairwise ~ temp|pop, adjust='tukey') 
-emmeans(d.mod3, pairwise ~ MPA|pop, adjust='tukey') 
+d.emm1.1 <- emmeans(d.mod2, pairwise ~ MPA|temp|pop, adjust='tukey', type = "response") 
+d.emm1.2 <- emmeans(d.mod2, pairwise ~ temp|pop|MPA, adjust='tukey', type = "response") 
+d.emm1.1$contrasts %>%
+  summary(infer = TRUE)
+d.emm1.2$contrasts %>%
+  summary(infer = TRUE)
 
-d.mod3.rg <- update(ref_grid(d.mod3), tran = "logit") # back-transform from logit scale
-emmeans(d.mod3.rg, ~ temp + pop, type="response") # By default, 95% CIs; what's up with these df??
-dmod3.RG.temp <- confint(emmeans(d.mod3.rg, ~ temp + pop, type="response"), adjust = "none", level = 0.68) # specify 68% CIs (roughly equivalent to +/- 1 SE)
+d.mod3.rg <- update(ref_grid(d.mod2), tran = "logit") # back-transform from logit scale
+emmeans(d.mod3.rg, ~ MPA + temp + pop, type="response") # By default, 95% CIs; what's up with these df??
+dmod3.RG.temp <- confint(emmeans(d.mod3.rg, ~ MPA + temp + pop, type="response"), adjust = "none", level = 0.95) 
 dmod3.RG.temp$adj <- dmod3.RG.temp$response * 100
 dmod3.RG.temp$adjLCL <- (dmod3.RG.temp$lower.CL)*100
 dmod3.RG.temp$adjUCL <- (dmod3.RG.temp$upper.CL)*100
@@ -1062,17 +1071,29 @@ dmod3.RG.temp$adjSE <- (dmod3.RG.temp$SE)*100
 
 col.pal <- c("tomato3", "cadetblue", "goldenrod", "seagreen4", "slateblue4")
 bw.pal <- c("gray80", "gray10", "gray40")
-germ.plot <- ggplot(data=dmod3.RG.temp, aes(x = temp, y = adj, shape = pop, fill = pop)) + 
-  geom_errorbar(aes(ymin=adj-adjSE, ymax=adj+adjSE), width = 0.3, size=0.5, position=position_dodge(width=0.5), alpha=0.3) +
-  geom_line(aes(group = pop, color = pop, alpha=0.05), size = 1, position=position_dodge(width = 0.5)) +
-  geom_point(aes(fill=pop, shape=pop), color="black", size=3.5, position=position_dodge(width=0.5)) +
-  ylab("Time to 50% germination (days)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
-  xlab("Temperature") + scale_shape_manual(values=c(21, 22, 23, 24, 25)) +
+germ.plot <- ggplot(data=dmod3.RG.temp, aes(x = MPA, y = adj, fill = pop)) + 
+  geom_errorbar(aes(ymin=adjLCL, ymax=adjUCL), width = 0.3, size=0.5, position=position_dodge(width=0.5)) +
+  geom_line(aes(group = pop, color = pop), size = 1, position=position_dodge(width = 0.5)) +
+  geom_point(aes(fill=pop), pch=21, color="black", size=3.5, position=position_dodge(width=0.5)) +
+  ylab("Maximum germination (%)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
+  xlab("Water potential (MPA)") + facet_wrap(~ temp) +
   scale_fill_manual(values=col.pal, name="fill") +
   scale_color_manual(values=col.pal) + 
-  theme_bw()
+  theme_bw() 
 germ.plot <- germ.plot + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
 germ.plot
+
+germ.plot2 <- ggplot(data=dmod3.RG.temp, aes(x = MPA, y = adj, fill = pop)) + 
+  geom_errorbar(aes(ymin=adjLCL, ymax=adjUCL), width = 0.3, size=0.5, position=position_dodge(width=0.5)) +
+  geom_line(aes(group = pop, color = pop), size = 1, position=position_dodge(width = 0.5)) +
+  geom_point(aes(fill=pop), pch=21, color="black", size=3.5, position=position_dodge(width=0.5)) +
+  ylab("Maximum germination (%)") + scale_y_continuous(breaks = seq(0,100,20), limits = c(0,100)) + 
+  xlab("Water potential (MPA)") + facet_wrap(~ temp) +
+  scale_fill_manual(values=col.pal, name="fill") +
+  scale_color_manual(values=col.pal) + 
+  theme_bw() 
+germ.plot2 <- germ.plot2 + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black"))
+germ.plot2
 
 # pull in observed data to overlay
 d.estimate$adj <- d.estimate$estimate * 100
@@ -1158,15 +1179,12 @@ for (i in 1:nrow(e.estimate)){
 }
 
 # Run model!
-e.mod1 <- lmer(log(estimate) ~ temp * MPA +
-                 (1|temp) + (1|temp:MPA:pop) + (1|pop), # unsure if this is correct
-               data=e.estimate, control=lmerControl(optimizer="bobyqa"))
-
-summary(e.mod1) # Check with Susan to confirm I'm getting the random effect structure right
+e.mod1 <- glm(log(estimate) ~ temp * MPA * pop,
+             data=e.estimate, family=Gamma)
+summary(e.mod1)
 Anova(e.mod1)
-plot(e.mod1) # okay..
 simulationOutput.e.mod1 <- DHARMa::simulateResiduals(e.mod1, plot=T) # pretty good
-DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$pop) # wow that's not good; a lot of variance in population 
+DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$pop) 
 DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$MPA)
 DHARMa::plotResiduals(simulationOutput.e.mod1, form = e.estimate$Temp) 
 
